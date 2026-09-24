@@ -1,0 +1,126 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  pythonVersion: '3.12'
+  imageName: 'school-grade-predictor'
+  sonarCloudServiceConnection: 'SonarCloud'
+  sonarOrganization: '$(SONAR_ORGANIZATION)'
+
+stages:
+- stage: Test
+  displayName: Run Tests and Coverage
+  jobs:
+  - job: Test
+    steps:
+    - checkout: self
+      fetchDepth: 0
+
+    - task: SonarCloudPrepare@3
+      displayName: Prepare SonarQube Cloud analysis
+      inputs:
+        SonarCloud: '$(sonarCloudServiceConnection)'
+        organization: '$(sonarOrganization)'
+        scannerMode: 'cli'
+        configMode: 'file'
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(pythonVersion)'
+
+    - script: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+      displayName: Install dependencies
+
+    - script: |
+        python -m coverage run -m pytest
+        python -m coverage xml -o coverage.xml
+        python -m coverage report
+      displayName: Run pytest with coverage
+
+    - task: SonarCloudAnalyze@3
+      displayName: Run SonarQube Cloud SAST
+
+    - task: SonarCloudPublish@3
+      displayName: Publish SonarQube Cloud quality gate
+      inputs:
+        pollingTimeoutSec: '300'
+
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFormat: 'JUnit'
+        testResultsFiles: '**/test-results.xml'
+      condition: succeededOrFailed()
+      displayName: Publish test results
+
+- stage: Docker
+  displayName: Build Docker Image
+  dependsOn: Test
+  condition: succeeded()
+  jobs:
+  - job: DockerBuild
+    steps:
+    - task: Docker@2
+      displayName: Build Docker image
+      inputs:
+        command: build
+        Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        repository: '$(imageName)'
+        tags: |
+          $(Build.BuildId)
+          latest
+
+    - bash: |
+        docker run --rm \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v "$(Agent.TempDirectory)/trivy-cache:/root/.cache/" \
+          aquasec/trivy:0.74.0 image \
+          --exit-code 1 \
+          --ignore-unfixed \
+          --severity HIGH,CRITICAL \
+          "$(imageName):$(Build.BuildId)"
+      displayName: Scan Docker image with Trivy
+
+    - bash: |
+        docker run -d --name grade-predictor -p 5000:5000 "$(imageName):$(Build.BuildId)"
+        for attempt in {1..12}; do
+          if curl --fail --silent http://localhost:5000/health; then
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "Application health check failed"
+        exit 1
+      displayName: Start application for DAST
+
+    - bash: |
+        mkdir -p "$(Build.ArtifactStagingDirectory)"
+        docker run --rm --network host \
+          -v "$(Build.ArtifactStagingDirectory):/zap/wrk/:rw" \
+          ghcr.io/zaproxy/zaproxy:stable \
+          zap-baseline.py -t http://127.0.0.1:5000 \
+          -J zap-report.json -I
+      displayName: Run OWASP ZAP DAST baseline scan
+
+    - task: PublishBuildArtifacts@1
+      displayName: Publish DAST report
+      condition: always()
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/zap-report.json'
+        ArtifactName: 'zap-dast-report'
+        publishLocation: 'Container'
+
+    - bash: docker rm -f grade-predictor || true
+      displayName: Stop application container
+      condition: always()

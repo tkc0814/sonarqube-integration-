@@ -1,0 +1,112 @@
+name: School Grade Predictor CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    name: Test and Coverage
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests with coverage
+        run: |
+          python -m coverage run -m pytest
+          python -m coverage xml -o coverage.xml
+          python -m coverage report
+
+      - name: SonarQube Cloud SAST
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t school-grade-predictor:${{ github.sha }} \
+            -t school-grade-predictor:latest .
+
+      - name: Verify Docker image
+        run: docker image inspect school-grade-predictor:latest
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: school-grade-predictor:${{ github.sha }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+      - name: Start container for DAST
+        run: |
+          docker run -d --name grade-predictor -p 5000:5000 school-grade-predictor:latest
+          for attempt in {1..12}; do
+            if curl --fail --silent http://localhost:5000/health; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Application health check failed"
+          exit 1
+
+      - name: Run OWASP ZAP DAST baseline scan
+        run: |
+          mkdir -p zap-report
+          docker run --rm --network host \
+            -v "${{ github.workspace }}/zap-report:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://127.0.0.1:5000 \
+            -J zap-report.json -I
+
+      - name: Upload DAST report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-dast-report
+          path: zap-report/zap-report.json
+          if-no-files-found: ignore
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f grade-predictor || true

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f6f8fc">
+    <meta name="description" content="Estimate a student's grade from attendance, study time, and assessment scores.">
+    <title>Gradepath — Student grade predictor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Gradepath home">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span>gradepath</span>
+        </a>
+        <div class="topbar-note"><span class="status-dot"></span> Student insights <span class="topbar-divider">/</span> Grade predictor</div>
+        <a class="api-link" href="/health" target="_blank" rel="noreferrer">API status <span aria-hidden="true">↗</span></a>
+      </header>
+
+      <main>
+        <section class="intro" aria-labelledby="page-title">
+          <div class="intro-copy">
+            <div class="eyebrow"><span class="eyebrow-line"></span> A clearer view of progress</div>
+            <h1 id="page-title">Small insights.<br><span>Big possibilities.</span></h1>
+            <p class="intro-text">Bring attendance, study habits, and recent scores together to get a quick picture of a student's progress.</p>
+            <div class="intro-footnote"><span class="sparkle" aria-hidden="true">✳</span> A helpful estimate to guide the next conversation.</div>
+          </div>
+          <div class="intro-art" aria-hidden="true">
+            <div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div>
+            <div class="art-star star-one">✳</div><div class="art-star star-two">✦</div>
+            <div class="art-card">
+              <div class="art-card-top"><span>STUDENT SNAPSHOT</span><span class="art-menu">···</span></div>
+              <div class="art-avatar">S</div>
+              <div class="art-name">Steady progress</div>
+              <div class="art-caption">Good habits are adding up</div>
+              <div class="art-chart"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="art-chart-labels"><span>WEEK 01</span><span>WEEK 12</span></div>
+            </div>
+            <div class="art-badge"><span class="badge-check">✓</span><span><b>Progress,</b><br>not pressure.</span></div>
+          </div>
+        </section>
+
+        <section class="workspace" aria-label="Grade prediction workspace">
+          <form class="predictor-card" id="predict-form" novalidate>
+            <div class="card-heading">
+              <div>
+                <div class="section-kicker">QUICK ASSESSMENT</div>
+                <h2>Build a student snapshot</h2>
+                <p>Enter the latest details to estimate a grade.</p>
+              </div>
+              <div class="step-label"><span>01</span> / 01</div>
+            </div>
+
+            <div class="form-section">
+              <div class="form-section-title"><span class="section-icon student-icon" aria-hidden="true">✳</span><div><h3>Student details</h3><p>Who are we looking at today?</p></div></div>
+              <label class="field full-field" for="name">Student name <span class="optional-label">UP TO 80 CHARACTERS</span>
+                <input id="name" name="name" type="text" maxlength="80" placeholder="e.g. Alex Morgan" autocomplete="name" required>
+              </label>
+            </div>
+
+            <div class="form-section metrics-section">
+              <div class="form-section-title"><span class="section-icon metrics-icon" aria-hidden="true">↗</span><div><h3>Learning indicators</h3><p>Use the most recent available information.</p></div></div>
+              <div class="field-grid">
+                <label class="field" for="attendance">Attendance <span class="input-unit">%</span>
+                  <input id="attendance" name="attendance" type="number" min="0" max="100" step="any" placeholder="e.g. 92" required>
+                  <span class="field-hint">Percentage of classes attended</span>
+                </label>
+                <label class="field" for="study_hours">Study time <span class="input-unit">hrs / day</span>
+                  <input id="study_hours" name="study_hours" type="number" min="0" max="24" step="any" placeholder="e.g. 2.5" required>
+                  <span class="field-hint">Average hours of study per day</span>
+                </label>
+                <label class="field" for="previous_score">Previous score <span class="input-unit">/ 100</span>
+                  <input id="previous_score" name="previous_score" type="number" min="0" max="100" step="any" placeholder="e.g. 78" required>
+                  <span class="field-hint">Most recent exam or term score</span>
+                </label>
+                <label class="field" for="assignment_score">Assignment score <span class="input-unit">/ 100</span>
+                  <input id="assignment_score" name="assignment_score" type="number" min="0" max="100" step="any" placeholder="e.g. 84" required>
+                  <span class="field-hint">Average of recent assignments</span>
+                </label>
+                <label class="field full-field" for="internal_score">Internal assessment <span class="input-unit">/ 100</span>
+                  <input id="internal_score" name="internal_score" type="number" min="0" max="100" step="any" placeholder="e.g. 81" required>
+                  <span class="field-hint">Class tests, quizzes, or internal evaluation</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-error" id="form-error" role="alert" hidden></div>
+            <div class="form-actions">
+              <button class="sample-button" id="sample-button" type="button">Try sample data <span aria-hidden="true">↗</span></button>
+              <button class="submit-button" id="submit-button" type="submit"><span class="button-text">Generate prediction</span><span class="button-arrow" aria-hidden="true">→</span></button>
+            </div>
+            <p class="privacy-note"><span aria-hidden="true">◎</span> Use this estimate as a conversation starter, not a final measure.</p>
+          </form>
+
+          <aside class="result-panel" aria-live="polite" aria-atomic="true">
+            <div class="result-topline"><span class="result-kicker">YOUR PREDICTION</span><span class="result-icon" aria-hidden="true">✳</span></div>
+            <div id="result-empty" class="result-empty">
+              <div class="empty-illustration" aria-hidden="true"><div class="empty-paper"><span></span><span></span><span></span><i>?</i></div><div class="empty-orbit"></div></div>
+              <h2>Your snapshot<br>will appear here.</h2>
+              <p>Fill in the student details, then generate a prediction to see the result.</p>
+              <div class="empty-rule"></div>
+              <div class="empty-tip"><span>✦</span><p><b>Every learner is more than a number.</b><br>Use this estimate to support thoughtful, individual guidance.</p></div>
+            </div>
+            <div id="result-content" class="result-content" hidden>
+              <div class="student-result-name" id="result-name"></div>
+              <div class="grade-orb"><div class="grade-orb-inner"><span>GRADE</span><strong id="result-grade">—</strong></div></div>
+              <div class="performance-label" id="result-performance"></div>
+              <div class="score-block"><div class="score-heading"><span>Predicted score</span><strong><span id="result-score">0</span><small> / 100</small></strong></div><div class="score-track"><span id="score-fill"></span></div></div>
+              <div class="result-remark"><span class="remark-icon" aria-hidden="true">✦</span><div><span>TAKEAWAY</span><p id="result-remark"></p></div></div>
+              <button class="reset-button" id="reset-button" type="button">Edit student details <span aria-hidden="true">↗</span></button>
+            </div>
+            <div class="result-footer"><span class="footer-mark">g.</span><span>Made for progress, one student at a time.</span></div>
+          </aside>
+        </section>
+      </main>
+
+      <footer class="page-footer"><span>GRADEPATH <span class="footer-dot">•</span> STUDENT GRADE PREDICTOR</span><span>Designed to help you see what’s possible.</span></footer>
+    </div>
+    <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  </body>
+</html>
