@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # School Grade Predictor - Version 1
 
 A deliberately simple Flask application for teaching:
@@ -64,3 +65,6 @@ Both pipelines install dependencies, run tests/coverage, and build the Docker im
 For SonarQube Cloud/Server, configure the project and scanner in the CI platform, then use `sonar-project.properties`.
 
 The project is intentionally designed so students can first analyze the "bad" version, fix issues, increase test coverage, and analyze it again.
+=======
+# sonarqube-integration-
+>>>>>>> 09d91870f12053559bf6c47cbac8dbaf6a417af4
