@@ -18,59 +18,90 @@ variables:
   sonarOrganization: '$(SONAR_ORGANIZATION)'
 
 stages:
-- stage: Test
-  displayName: Run Tests and Coverage
+- stage: Lint
+  displayName: Lint Python code
   jobs:
-  - job: Test
+  - job: Ruff
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(pythonVersion)'
+    - bash: |
+        python -m pip install --upgrade pip
+        python -m pip install ruff==0.16.8
+        # F841 is suppressed for the intentionally retained Sonar demo credential fixture.
+        ruff check --output-format=github --per-file-ignores 'app/grade_predictor.py:F841' app tests
+      displayName: Run Ruff lint
+
+- stage: UnitTests
+  displayName: Run unit tests and coverage
+  dependsOn: Lint
+  jobs:
+  - job: Pytest
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(pythonVersion)'
+    - bash: |
+        python -m pip install --upgrade pip
+        python -m pip install -r requirements.txt
+      displayName: Install Python dependencies
+    - bash: |
+        python -m coverage run -m pytest --junitxml=test-results.xml
+        python -m coverage xml -o coverage.xml
+        python -m coverage report
+      displayName: Run pytest with coverage
+    - task: PublishTestResults@2
+      displayName: Publish unit test results
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFormat: JUnit
+        testResultsFiles: '**/test-results.xml'
+        failTaskOnMissingResultsFile: true
+    - task: PublishPipelineArtifact@1
+      displayName: Publish coverage report for SonarQube Cloud
+      inputs:
+        targetPath: 'coverage.xml'
+        artifact: 'coverage-report'
+        publishLocation: pipeline
+
+- stage: SAST
+  displayName: SonarQube Cloud SAST
+  dependsOn: UnitTests
+  jobs:
+  - job: SonarCloud
     steps:
     - checkout: self
       fetchDepth: 0
-
-    - task: SonarCloudPrepare@3
+    - task: DownloadPipelineArtifact@2
+      displayName: Download coverage report
+      inputs:
+        artifact: coverage-report
+        path: '$(Build.SourcesDirectory)'
+    - task: SonarCloudPrepare@4
       displayName: Prepare SonarQube Cloud analysis
       inputs:
         SonarCloud: '$(sonarCloudServiceConnection)'
         organization: '$(sonarOrganization)'
-        scannerMode: 'cli'
-        configMode: 'file'
-
-    - task: UsePythonVersion@0
-      inputs:
-        versionSpec: '$(pythonVersion)'
-
-    - script: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-      displayName: Install dependencies
-
-    - script: |
-        python -m coverage run -m pytest
-        python -m coverage xml -o coverage.xml
-        python -m coverage report
-      displayName: Run pytest with coverage
-
-    - task: SonarCloudAnalyze@3
+        scannerMode: cli
+        configMode: file
+    - task: SonarCloudAnalyze@4
       displayName: Run SonarQube Cloud SAST
-
-    - task: SonarCloudPublish@3
+    - task: SonarCloudPublish@4
       displayName: Publish SonarQube Cloud quality gate
       inputs:
         pollingTimeoutSec: '300'
 
-    - task: PublishTestResults@2
-      inputs:
-        testResultsFormat: 'JUnit'
-        testResultsFiles: '**/test-results.xml'
-      condition: succeededOrFailed()
-      displayName: Publish test results
-
-- stage: Docker
-  displayName: Build Docker Image
-  dependsOn: Test
+- stage: ContainerSecurity
+  displayName: Build, scan, and DAST the Docker image
+  dependsOn: SAST
   condition: succeeded()
   jobs:
-  - job: DockerBuild
+  - job: DockerBuildTrivyDast
     steps:
+    - checkout: self
     - task: Docker@2
       displayName: Build Docker image
       inputs:
@@ -80,8 +111,8 @@ stages:
         tags: |
           $(Build.BuildId)
           latest
-
     - bash: |
+        mkdir -p "$(Agent.TempDirectory)/trivy-cache"
         docker run --rm \
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v "$(Agent.TempDirectory)/trivy-cache:/root/.cache/" \
@@ -91,7 +122,6 @@ stages:
           --severity HIGH,CRITICAL \
           "$(imageName):$(Build.BuildId)"
       displayName: Scan Docker image with Trivy
-
     - bash: |
         docker run -d --name grade-predictor -p 5000:5000 "$(imageName):$(Build.BuildId)"
         for attempt in {1..12}; do
@@ -103,24 +133,21 @@ stages:
         echo "Application health check failed"
         exit 1
       displayName: Start application for DAST
-
     - bash: |
-        mkdir -p "$(Build.ArtifactStagingDirectory)"
+        mkdir -p "$(Build.ArtifactStagingDirectory)/zap-report"
         docker run --rm --network host \
-          -v "$(Build.ArtifactStagingDirectory):/zap/wrk/:rw" \
+          -v "$(Build.ArtifactStagingDirectory)/zap-report:/zap/wrk/:rw" \
           ghcr.io/zaproxy/zaproxy:stable \
           zap-baseline.py -t http://127.0.0.1:5000 \
           -J zap-report.json -I
       displayName: Run OWASP ZAP DAST baseline scan
-
-    - task: PublishBuildArtifacts@1
+    - task: PublishPipelineArtifact@1
       displayName: Publish DAST report
       condition: always()
       inputs:
-        PathtoPublish: '$(Build.ArtifactStagingDirectory)/zap-report.json'
-        ArtifactName: 'zap-dast-report'
-        publishLocation: 'Container'
-
+        targetPath: '$(Build.ArtifactStagingDirectory)/zap-report'
+        artifact: 'zap-dast-report'
+        publishLocation: pipeline
     - bash: docker rm -f grade-predictor || true
       displayName: Stop application container
       condition: always()

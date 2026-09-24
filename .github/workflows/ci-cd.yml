@@ -2,41 +2,85 @@ name: School Grade Predictor CI/CD
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-    name: Test and Coverage
+  lint:
+    name: Lint Python code
     runs-on: ubuntu-latest
-    env:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ruff
+        run: python -m pip install ruff==0.16.8
+
+      - name: Run Ruff lint
+        # F841 is suppressed for the intentionally retained Sonar demo credential fixture.
+        run: ruff check --output-format=github --per-file-ignores 'app/grade_predictor.py:F841' app tests
+
+  unit-tests:
+    name: Unit tests and coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run pytest with coverage
+        run: |
+          python -m coverage run -m pytest --junitxml=test-results.xml
+          python -m coverage xml -o coverage.xml
+          python -m coverage report
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-coverage-reports
+          path: |
+            coverage.xml
+            test-results.xml
+          if-no-files-found: ignore
+
+  sast:
+    name: SonarQube Cloud SAST
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests]
+    # Forked pull requests do not receive repository secrets.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Download coverage report
+        uses: actions/download-artifact@v4
         with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run tests with coverage
-        run: |
-          python -m coverage run -m pytest
-          python -m coverage xml -o coverage.xml
-          python -m coverage report
+          name: test-coverage-reports
+          path: .
 
       - name: SonarQube Cloud SAST
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: SonarSource/sonarqube-scan-action@v7
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -44,17 +88,16 @@ jobs:
           args: >
             -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}
 
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage.xml
-
-  docker:
-    name: Build Docker Image
+  container-security:
+    name: Docker build, Trivy scan, and DAST
     runs-on: ubuntu-latest
-    needs: test
-
+    needs: [lint, unit-tests, sast]
+    # Permit container checks on fork PRs when SAST is skipped for unavailable secrets.
+    if: >-
+      always() &&
+      needs.lint.result == 'success' &&
+      needs.unit-tests.result == 'success' &&
+      (needs.sast.result == 'success' || needs.sast.result == 'skipped')
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -66,7 +109,7 @@ jobs:
             -t school-grade-predictor:latest .
 
       - name: Verify Docker image
-        run: docker image inspect school-grade-predictor:latest
+        run: docker image inspect school-grade-predictor:${{ github.sha }}
 
       - name: Scan Docker image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
@@ -80,7 +123,7 @@ jobs:
 
       - name: Start container for DAST
         run: |
-          docker run -d --name grade-predictor -p 5000:5000 school-grade-predictor:latest
+          docker run -d --name grade-predictor -p 5000:5000 school-grade-predictor:${{ github.sha }}
           for attempt in {1..12}; do
             if curl --fail --silent http://localhost:5000/health; then
               exit 0
@@ -107,6 +150,6 @@ jobs:
           path: zap-report/zap-report.json
           if-no-files-found: ignore
 
-      - name: Stop container
+      - name: Stop application container
         if: always()
         run: docker rm -f grade-predictor || true
